@@ -250,4 +250,5 @@ def chorin(config):
     except KeyboardInterrupt:
         pass
 
-chorin(Config(sys.argv[1:]))
+if __name__ == "__main__":
+    chorin(Config(sys.argv[1:]))
