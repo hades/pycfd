@@ -28,6 +28,9 @@ class Config(object):
             else:
                 print "{} == {}".format(i, getattr(self, i))
 
+def harmonic_average(a, b):
+    return 2./(1./a + 1./b)
+
 def fill_matrices(config):
     dim = config.CELLSX * config.CELLSY * config.CELLSZ
     MomentumMatrix = scipy.sparse.dok_matrix((dim, dim))
@@ -39,6 +42,7 @@ def fill_matrices(config):
     DYg = scipy.sparse.dok_matrix((dim, dim))
     DZg = scipy.sparse.dok_matrix((dim, dim))
     InletVelocity = numpy.zeros((dim, 1))
+    InternalNode  = numpy.zeros((dim, 1), dtype=numpy.bool)
     UF = numpy.zeros((dim, 1))
 
     def is_porous(i, j, k):
@@ -92,13 +96,17 @@ def fill_matrices(config):
             if is_porous(i + n[0], j + n[1], k + n[2]):
                 their_pcoeff += config.MU / config.K
 
-            this_coeff = harmonic_average(1./my_pcoeff, 1./their_pcoeff)
+            this_coeff = harmonic_average(1./my_pcoeff, 1./their_pcoeff) / (config.DX * config.DX)
             PressureMatrix[nodeid, neighb_nodeid] = this_coeff
             my_central_pcoeff += this_coeff
-            wall_interps.append((this_coeff / my_pcoeff, this_coeff / their_pcoeff))
+
+            interp_my = 1./my_pcoeff
+            interp_their = 1./their_pcoeff
+            wall_interps.append((interp_my / (interp_my + interp_their),
+                                 interp_their / (interp_my + interp_their)))
 
         MomentumMatrix[nodeid, nodeid] = 6. * coeff + my_pcoeff
-        PressureMatrix[nodeid, nodeid] = my_central_pcoeff
+        PressureMatrix[nodeid, nodeid] = -my_central_pcoeff
 
         DX[nodeid, get_nodeid(i + 1, j, k)] = .5 / config.DX
         DX[nodeid, get_nodeid(i - 1, j, k)] = -.5 / config.DX
@@ -120,6 +128,7 @@ def fill_matrices(config):
         DZg[nodeid, nodeid] = (wall_interps[5][0] - wall_interps[4][0]) / config.DX
 
         UF[nodeid, 0] = 1. / my_pcoeff
+        InternalNode[nodeid, 0] = 1
 
     for i in xrange(config.CELLSX):
         boundary = False
@@ -132,6 +141,8 @@ def fill_matrices(config):
             inside_direction[0] -= 1
 
         for j in xrange(config.CELLSY):
+            xboundary = boundary
+            xinside_direction = inside_direction[:]
             if j == 0:
                 boundary = 'wall'
                 inside_direction[1] += 1
@@ -140,6 +151,8 @@ def fill_matrices(config):
                 inside_direction[1] -= 1
 
             for k in xrange(config.CELLSZ):
+                yboundary = boundary
+                yinside_direction = inside_direction[:]
                 if k == 0:
                     boundary = 'inlet'
                     inside_direction[2] += 1
@@ -148,6 +161,10 @@ def fill_matrices(config):
                     inside_direction[2] -= 1
 
                 fill_row(i, j, k, boundary, inside_direction)
+                boundary = yboundary
+                inside_direction = yinside_direction
+            boundary = xboundary
+            inside_direction = xinside_direction
 
     return dim, \
            MomentumMatrix.tocsc(), \
@@ -159,7 +176,8 @@ def fill_matrices(config):
            DYg.tocsc(), \
            DZg.tocsc(), \
            InletVelocity, \
-           UF
+           UF, \
+           InternalNode
 
 def solve(matrix, rhs):
     result = scipy.sparse.linalg.spsolve(matrix, rhs)
@@ -169,7 +187,7 @@ def solve(matrix, rhs):
 
 def chorin(config):
     print "Creating matrices..."
-    dim, MM, PM, DX, DY, DZ, DXg, DYg, DZg, IV, UF = fill_matrices(config)
+    dim, MM, PM, DX, DY, DZ, DXg, DYg, DZg, IV, UF, INT = fill_matrices(config)
     print "Problem dimension is {}".format(dim)
     u = numpy.zeros((dim, 1))
     v = numpy.zeros((dim, 1))
@@ -189,21 +207,22 @@ def chorin(config):
             dp_dy = DYg * p_old
             dp_dz = DZg * p_old
 
-            u_star = solve(MM, config.UINLET * IV + (config.RHO / config.DT) * u_old - dp_dx)
-            v_star = solve(MM, config.VINLET * IV + (config.RHO / config.DT) * v_old - dp_dy)
-            w_star = solve(MM, config.WINLET * IV + (config.RHO / config.DT) * w_old - dp_dz)
+            u_star = solve(MM, config.UINLET * IV + INT * ((config.RHO / config.DT) * u_old - dp_dx))
+            v_star = solve(MM, config.VINLET * IV + INT * ((config.RHO / config.DT) * v_old - dp_dy))
+            w_star = solve(MM, config.WINLET * IV + INT * ((config.RHO / config.DT) * w_old - dp_dz))
 
             div_u_star = DX * u_star + DY * v_star + DZ * w_star
 
-            p_corr = solve(PM, div_u_star)
+            p_corr = solve(PM, INT * div_u_star)
 
             dp_corr_dx = DXg * p_corr
             dp_corr_dy = DYg * p_corr
             dp_corr_dz = DZg * p_corr
 
-            u = u_star + UF * dp_corr_dx
-            v = v_star + UF * dp_corr_dy
-            w = w_star + UF * dp_corr_dz
+            u = u_star - UF * dp_corr_dx
+            v = v_star - UF * dp_corr_dy
+            w = w_star - UF * dp_corr_dz
+            p = p + p_corr
 
             print "T=={} ".format(time),
             numpy.savez("T{:04}.npz".format(timestep),
@@ -220,8 +239,9 @@ def chorin(config):
                         dp_corr_dz=dp_corr_dz,
                         u=u,
                         v=v,
-                        w=w)
-            print "umax=={} vmax=={} wmax={} ".format(u.max(), v.max(), w.max()),
+                        w=w,
+                        p=p)
+            print "umax=={} vmax=={} wmax={} pmax={} ".format(u.max(), v.max(), w.max(), p.max()),
             print
             if time > 100.: break
             if timestep > 500: break
