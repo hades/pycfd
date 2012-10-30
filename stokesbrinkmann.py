@@ -1,9 +1,10 @@
 import numpy
 import scipy.sparse
 import scipy.sparse.linalg
+import sys
 
 class Config(object):
-    def __init__(self):
+    def __init__(self, args=[]):
         self.RHO     = 847.5
         self.MU      = .17254
         self.K       = 3.17875e-10
@@ -17,6 +18,15 @@ class Config(object):
         self.UINLET  = 0.
         self.VINLET  = 0.
         self.WINLET  = 1e-3
+
+        for i in args:
+            if '=' in i:
+                arg, val = i.split('=', 1)
+                if not hasattr(self, arg):
+                    print "warning: setting new config variable {}".format(arg)
+                setattr(self, arg, eval(val, dict((k, getattr(self, k)) for k in dir(self))))
+            else:
+                print "{} == {}".format(i, getattr(self, i))
 
 def fill_matrices(config):
     dim = config.CELLSX * config.CELLSY * config.CELLSZ
@@ -220,4 +230,4 @@ def chorin(config):
     except KeyboardInterrupt:
         pass
 
-chorin(Config())
+chorin(Config(sys.argv[1:]))
