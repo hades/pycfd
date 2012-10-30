@@ -21,8 +21,10 @@ def fill_matrices(config):
     PressureMatrix = scipy.sparse.dok_matrix((dim, dim))
     DX = scipy.sparse.dok_matrix((dim, dim))
     DY = scipy.sparse.dok_matrix((dim, dim))
+    DZ = scipy.sparse.dok_matrix((dim, dim))
     DXg = scipy.sparse.dok_matrix((dim, dim))
     DYg = scipy.sparse.dok_matrix((dim, dim))
+    DZg = scipy.sparse.dok_matrix((dim, dim))
     InletVelocity = numpy.zeros((dim, 1))
 
     def is_porous(i, j, k):
@@ -62,12 +64,13 @@ def fill_matrices(config):
         my_pcoeff = muk + config.RHO / config.DT
 
         my_central_pcoeff = 0.
+        wall_interps = []
         for n in ( (-1, 0, 0),
                    (1, 0, 0),
-                   (0, 1, 0),
                    (0, -1, 0),
-                   (0, 0, 1),
-                   (0, 0, -1), ):
+                   (0, 1, 0),
+                   (0, 0, -1),
+                   (0, 0, 1), ):
             neighb_nodeid = get_nodeid(i + n[0], j + n[1], k + n[2])
             MomentumMatrix[nodeid, neighb_nodeid] = -coeff
 
@@ -78,9 +81,29 @@ def fill_matrices(config):
             this_coeff = harmonic_average(1./my_pcoeff, 1./their_pcoeff)
             PressureMatrix[nodeid, neighb_nodeid] = this_coeff
             my_central_pcoeff += this_coeff
+            wall_interps.append((this_coeff / my_pcoeff, this_coeff / their_pcoeff))
 
         MomentumMatrix[nodeid, nodeid] = 6. * coeff + my_pcoeff
         PressureMatrix[nodeid, nodeid] = my_central_pcoeff
+
+        DX[nodeid, get_nodeid(i + 1, j, k)] = .5 / config.DX
+        DX[nodeid, get_nodeid(i - 1, j, k)] = -.5 / config.DX
+        DY[nodeid, get_nodeid(i, j + 1, k)] = .5 / config.DX
+        DY[nodeid, get_nodeid(i, j - 1, k)] = -.5 / config.DX
+        DZ[nodeid, get_nodeid(i, j, k + 1)] = .5 / config.DX
+        DZ[nodeid, get_nodeid(i, j, k - 1)] = -.5 / config.DX
+
+        DXg[nodeid, get_nodeid(i + 1, j, k)] = wall_interps[1][1] / config.DX
+        DXg[nodeid, get_nodeid(i - 1, j, k)] = -wall_interps[0][1] / config.DX
+        DXg[nodeid, nodeid] = (wall_interps[1][0] - wall_interps[0][0]) / config.DX
+
+        DYg[nodeid, get_nodeid(i, j + 1, k)] = wall_interps[3][1] / config.DX
+        DYg[nodeid, get_nodeid(i, j - 1, k)] = -wall_interps[2][1] / config.DX
+        DYg[nodeid, nodeid] = (wall_interps[3][0] - wall_interps[2][0]) / config.DX
+
+        DZg[nodeid, get_nodeid(i, j, k + 1)] = wall_interps[5][1] / config.DX
+        DZg[nodeid, get_nodeid(i, j, k - 1)] = -wall_interps[4][1] / config.DX
+        DZg[nodeid, nodeid] = (wall_interps[5][0] - wall_interps[4][0]) / config.DX
 
     for i in xrange(config.CELLSX):
         boundary = False
@@ -109,5 +132,16 @@ def fill_matrices(config):
                     inside_direction[2] -= 1
 
                 fill_row(i, j, k, boundary, inside_direction)
+
+    return dim, \
+           MomentumMatrix.tocsc(), \
+           PressureMatrix.tocsc(), \
+           DX.tocsc(), \
+           DY.tocsc(), \
+           DZ.tocsc(), \
+           DXg.tocsc(), \
+           DYg.tocsc(), \
+           DZg.tocsc(), \
+           InletVelocity
 
 fill_matrices(Config())
