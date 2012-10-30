@@ -14,6 +14,9 @@ class Config(object):
         self.CELLSZ  = 100
         self.POROUS_BEGIN = 40
         self.POROUS_END   = 60
+        self.UINLET  = 0.
+        self.VINLET  = 0.
+        self.WINLET  = 1e-3
 
 def fill_matrices(config):
     dim = config.CELLSX * config.CELLSY * config.CELLSZ
@@ -26,6 +29,7 @@ def fill_matrices(config):
     DYg = scipy.sparse.dok_matrix((dim, dim))
     DZg = scipy.sparse.dok_matrix((dim, dim))
     InletVelocity = numpy.zeros((dim, 1))
+    UF = numpy.zeros((dim, 1))
 
     def is_porous(i, j, k):
         return k >= config.POROUS_BEGIN and k < config.POROUS_END
@@ -105,6 +109,8 @@ def fill_matrices(config):
         DZg[nodeid, get_nodeid(i, j, k - 1)] = -wall_interps[4][1] / config.DX
         DZg[nodeid, nodeid] = (wall_interps[5][0] - wall_interps[4][0]) / config.DX
 
+        UF[nodeid, 0] = 1. / my_pcoeff
+
     for i in xrange(config.CELLSX):
         boundary = False
         inside_direction = [0, 0, 0]
@@ -142,6 +148,76 @@ def fill_matrices(config):
            DXg.tocsc(), \
            DYg.tocsc(), \
            DZg.tocsc(), \
-           InletVelocity
+           InletVelocity, \
+           UF
 
-fill_matrices(Config())
+def solve(matrix, rhs):
+    result = scipy.sparse.linalg.spsolve(matrix, rhs)
+    if len(result.shape) < 2:
+        return result.reshape((result.shape[0], 1))
+    return result
+
+def chorin(config):
+    print "Creating matrices..."
+    dim, MM, PM, DX, DY, DZ, DXg, DYg, DZg, IV, UF = fill_matrices(config)
+    print "Problem dimension is {}".format(dim)
+    u = numpy.zeros((dim, 1))
+    v = numpy.zeros((dim, 1))
+    w = numpy.zeros((dim, 1))
+    p = numpy.zeros((dim, 1))
+
+    timestep = 0
+    time = 0.
+    try:
+        while True:
+            u_old = u.copy()
+            v_old = v.copy()
+            w_old = w.copy()
+            p_old = p.copy()
+
+            dp_dx = DXg * p_old
+            dp_dy = DYg * p_old
+            dp_dz = DZg * p_old
+
+            u_star = solve(MM, config.UINLET * IV + (config.RHO / config.DT) * u_old - dp_dx)
+            v_star = solve(MM, config.VINLET * IV + (config.RHO / config.DT) * v_old - dp_dy)
+            w_star = solve(MM, config.WINLET * IV + (config.RHO / config.DT) * w_old - dp_dz)
+
+            div_u_star = DX * u_star + DY * v_star + DZ * w_star
+
+            p_corr = solve(PM, div_u_star)
+
+            dp_corr_dx = DXg * p_corr
+            dp_corr_dy = DYg * p_corr
+            dp_corr_dz = DZg * p_corr
+
+            u = u_star + UF * dp_corr_dx
+            v = v_star + UF * dp_corr_dy
+            w = w_star + UF * dp_corr_dz
+
+            print "T=={} ".format(time),
+            numpy.savez("T{:04}.npz".format(timestep),
+                        dp_dx=dp_dx,
+                        dp_dy=dp_dy,
+                        dp_dz=dp_dz,
+                        u_star=u_star,
+                        v_star=v_star,
+                        w_star=w_star,
+                        div_u_star=div_u_star,
+                        p_corr=p_corr,
+                        dp_corr_dx=dp_corr_dx,
+                        dp_corr_dy=dp_corr_dy,
+                        dp_corr_dz=dp_corr_dz,
+                        u=u,
+                        v=v,
+                        w=w)
+            print "umax=={} vmax=={} wmax={} ".format(u.max(), v.max(), w.max()),
+            print
+            if time > 100.: break
+            if timestep > 500: break
+            timestep += 1
+            time += config.DT
+    except KeyboardInterrupt:
+        pass
+
+chorin(Config())
