@@ -18,6 +18,7 @@ class Config(object):
         self.UINLET  = 0.
         self.VINLET  = 0.
         self.WINLET  = 1e-3
+        self.URF     = 1.
 
         for i in args:
             if '=' in i:
@@ -219,10 +220,10 @@ def chorin(config):
             dp_corr_dy = DYg * p_corr
             dp_corr_dz = DZg * p_corr
 
-            u = u_star - UF * dp_corr_dx
-            v = v_star - UF * dp_corr_dy
-            w = w_star - UF * dp_corr_dz
-            p = p + p_corr
+            u = u_star - config.URF * UF * dp_corr_dx
+            v = v_star - config.URF * UF * dp_corr_dy
+            w = w_star - config.URF * UF * dp_corr_dz
+            p = p + config.URF * p_corr
 
             print "T=={} ".format(time),
             numpy.savez("T{:04}.npz".format(timestep),
