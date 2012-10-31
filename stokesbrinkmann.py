@@ -13,8 +13,8 @@ class Config(object):
         self.CELLSX  = 20
         self.CELLSY  = 20
         self.CELLSZ  = 100
-        self.POROUS_BEGIN = 40
-        self.POROUS_END   = 60
+        self.POROUS_BEGIN = 20
+        self.POROUS_END   = 30
         self.UINLET  = 0.
         self.VINLET  = 0.
         self.WINLET  = 1e-3
@@ -180,16 +180,45 @@ def fill_matrices(config):
            UF, \
            InternalNode
 
-def solve(matrix, rhs):
+def solve_direct(matrix, rhs):
     result = scipy.sparse.linalg.spsolve(matrix, rhs)
     if len(result.shape) < 2:
         return result.reshape((result.shape[0], 1))
     return result
 
+def solve_iterate(matrix, rhs, maxiter, tol):
+    print "running lgmres for matrix {}...".format(repr(matrix)),
+    #M = scipy.sparse.linalg.dsolve.spilu(matrix)
+    #LO = scipy.sparse.linalg.LinearOperator(matrix.shape, matvec=lambda v: M.solve(v))
+    x, info = scipy.sparse.linalg.lgmres(matrix, rhs, maxiter=maxiter, tol=tol)
+    print "done, residual {}".format(((matrix * x) - rhs.reshape((matrix.shape[0],))).max())
+    if info:
+        raise RuntimeError, "solver diverged ({0})".format(info)
+    if len(x.shape) < 2:
+        return x.reshape((x.shape[0], 1))
+    return x
+
+def solve(matrix, rhs, counter=[0]):
+    numpy.save('rhs{:04}.npy'.format(counter[0]), rhs)
+    counter[0] += 1
+    return solve_iterate(matrix, rhs, 10000, 1e-6)
+
 def chorin(config):
     print "Creating matrices..."
     dim, MM, PM, DX, DY, DZ, DXg, DYg, DZg, IV, UF, INT = fill_matrices(config)
     print "Problem dimension is {}".format(dim)
+
+    numpy.save('MM.npy', MM)
+    numpy.save('PM.npy', PM)
+    numpy.save('DX.npy', DX)
+    numpy.save('DY.npy', DY)
+    numpy.save('DZ.npy', DZ)
+    numpy.save('DXg.npy', DXg)
+    numpy.save('DYg.npy', DYg)
+    numpy.save('DZg.npy', DZg)
+    numpy.save('IV.npy', IV)
+    numpy.save('UF.npy', UF)
+
     u = numpy.zeros((dim, 1))
     v = numpy.zeros((dim, 1))
     w = numpy.zeros((dim, 1))
